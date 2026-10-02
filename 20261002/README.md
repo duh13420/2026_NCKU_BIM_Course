@@ -184,3 +184,53 @@ flowchart TD
 | 兩個 agent 想同時連 | 同一時間只容許一筆連線；ribbon「切換/釋放連線」後再接另一個 |
 | 模型被改壞 | 沒存檔就關掉重開，回到最後存檔狀態；有備份副本就還原 |
 | 學生版開不了檔案 | 檔案是商業版建的；學生版與商業版不相容，改從群組 repo 領學生版檔案 |
+
+
+## 實作紀錄（學員）
+
+### 環境安裝
+
+依 [shuotao/REVIT_MCP_study](https://github.com/shuotao/REVIT_MCP_study) 部署指南執行 `scripts\setup.ps1`：
+
+| 項目 | 結果 |
+|------|------|
+| Node.js | v24.19.0 |
+| .NET SDK | 8.0.425 / 10.0.401（Nice3point SDK 6.1.0 需 .NET 10） |
+| MCP Server | build 完成 |
+| Revit add-in | 2023 與 2026 皆 build + deploy 至 `%APPDATA%\Autodesk\Revit\Addins\{version}` |
+| Agent | Claude Code v2.1.287（`npm install -g @anthropic-ai/claude-code`） |
+| WebSocket | port 8964 預檢通過 |
+
+### MCP 控制 Revit 實測
+
+連線成功後，透過 agent 下指令建立模型，並回讀驗證：
+
+| 操作 | ElementId | 驗證結果 |
+|------|-----------|----------|
+| 四面牆（100×100cm 封閉空間） | 257328–257331 | `get_wall_info` 確認 |
+| 長牆 300cm | 257328 | 長 3000mm、厚 150mm、高 3000mm、FL1 |
+| 短牆 100cm | 257329 | 長 1000mm、厚 150mm、`RC 牆 15cm` |
+
+單位為公釐（mm）；`create_wall` 回傳 ElementId 徎以 `get_wall_info` 回讀，確認長度／厚度／高度／樓層皆符合預期。
+
+### 遇到的問題與排查
+
+**問題：所有指令回 `Object reference not set to an instance of an object.`**
+
+排查歷程：
+
+1. 先懷疑 `ActiveUIDocument` 為 null —— 但 Revit 主視窗標題顯示 `[專案1 - 樓層平面: FL1]`，文件確實開著。
+2. 檢查 add-in 是否重複註冊（機器層 vs 使用者層）—— 只有一個 `RevitMCP.addin`，部署 DLL 與 build 時間戳一致。
+3. 送不存在的命令做對照 —— **一樣回 NRE**，代表錯誤發生在 `switch` 分派**之前**。
+4. 對照 Revit 端日誌，發現 `處理命令:` 後面的命令名稱是**空的**。
+
+**根因**：日誌欄位名稱不符。Revit 端模型 `MCP/Models/CommandModels.cs` 定義的是 `CommandName`，而測試腳本送出的是 `command`，反序列化後 `CommandName` 為 null，`CommandName.ToLower()` 於是拋 NRE。
+
+**解法**：WebSocket 請求改送 `CommandName` 而非 `command`，問題排除。
+
+> 教訓：連線層（WebSocket 收發）正常不代表應用層正常。**日誌裡的欄位值**比堆疊追蹤更快指出問題；先確認資料真的有被解析到，再往下查。
+
+### 注意事項
+
+- 同一時間只能有一個 agent 連線 Revit，第二個連線會吃 **409**（單客戶端鎖）。
+- 需先在 Revit 開啟專案文件，再從 Ribbon 按「MCP 服務（開/關）」。
