@@ -1,0 +1,5 @@
+# 不上傳:Revit 模型(課程規定不可 commit .rvt)、舊檔、氣象檔、壓縮檔
+*.rvt
+OLD/
+*.epw
+*.zip
